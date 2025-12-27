@@ -1,0 +1,7 @@
+{
+  "name": "Copy of UBL Messenger",
+  "description": "A revolutionary business messenger where every conversation is a ledger entry and agents are first-class colleagues. Built on the architecture of transparency, execution, and real-time collaboration.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
