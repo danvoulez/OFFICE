@@ -57,7 +57,7 @@ tokio-stream = "0.1"
 tokio-tungstenite = "0.21"
 
 # Database (optional, for persistence)
-sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "chrono", "uuid"], optional = true }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid"], optional = true }
 
 # Rate limiting
 governor = "0.6"
