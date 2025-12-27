@@ -8,11 +8,11 @@ use chrono::{DateTime, Utc, Duration};
 use serde::{Deserialize, Serialize};
 
 use crate::entity::EntityId;
-use crate::context::memory::{Memory, HistoricalSynthesis, MemoryConfig};
+use crate::context::{Memory, HistoricalSynthesis};
 use crate::session::Handover;
 use crate::ubl_client::UblClient;
 use crate::llm::LlmProvider;
-use crate::{OfficeError, Result};
+use crate::Result;
 
 /// Configuration for dreaming cycle
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,7 +177,7 @@ impl DreamingCycle {
     }
 
     /// Garbage collection - archive old, resolved events
-    async fn garbage_collect(&self, entity_id: &EntityId, memory: &mut Memory) -> Result<usize> {
+    async fn garbage_collect(&self, entity_id: &EntityId, _memory: &mut Memory) -> Result<usize> {
         // Get resolved issues from ledger
         let resolved = self.ubl_client.get_resolved_issues(entity_id).await
             .unwrap_or_default();
@@ -195,7 +195,7 @@ impl DreamingCycle {
     async fn emotional_reset(
         &self,
         entity_id: &EntityId,
-        memory: &Memory,
+        _memory: &Memory,
     ) -> Result<Vec<String>> {
         // Look for anxiety-related keywords in recent handovers
         let handovers = self.ubl_client.get_handovers(entity_id, 10).await
@@ -269,6 +269,11 @@ impl DreamingCycle {
 
         // Create historical synthesis
         if !trajectories.is_empty() {
+            let patterns_str = if patterns.is_empty() {
+                "No notable patterns.".to_string()
+            } else {
+                patterns.join(" ")
+            };
             let synthesis = HistoricalSynthesis {
                 period_start: Utc::now() - Duration::days(self.config.synthesis_days as i64),
                 period_end: Utc::now(),
@@ -276,7 +281,7 @@ impl DreamingCycle {
                     "Over the past {} days, completed {} sessions. {}",
                     self.config.synthesis_days,
                     trajectories.len(),
-                    if patterns.is_empty() { "No notable patterns." } else { &patterns.join(" ") }
+                    patterns_str
                 ),
                 event_count: trajectories.len() as u32,
                 themes: patterns.clone(),

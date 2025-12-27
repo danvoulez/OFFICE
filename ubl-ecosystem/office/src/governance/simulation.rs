@@ -5,8 +5,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::context::frame::Affordance;
-use crate::{OfficeError, Result};
+use crate::context::Affordance;
+use crate::Result;
 
 /// Configuration for simulation
 #[derive(Debug, Clone, Serialize, Deserialize)]

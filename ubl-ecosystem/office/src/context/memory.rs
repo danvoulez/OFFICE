@@ -200,13 +200,15 @@ impl Memory {
     pub fn compress_to_budget(&mut self, max_tokens: u64) {
         while self.estimate_tokens() > max_tokens {
             // First, remove data from recent events
+            let mut cleared_any = false;
             for event in &mut self.recent_events {
                 if event.data.is_some() {
                     event.data = None;
-                    if self.estimate_tokens() <= max_tokens {
-                        return;
-                    }
+                    cleared_any = true;
                 }
+            }
+            if cleared_any && self.estimate_tokens() <= max_tokens {
+                return;
             }
 
             // Then, reduce recent events
