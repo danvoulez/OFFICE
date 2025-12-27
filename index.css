@@ -1,0 +1,21 @@
+/*
+  Lightweight readability polish.
+  Tailwind is loaded via CDN, so this file is only for global tweaks.
+*/
+
+html, body {
+  line-height: 1.5;
+}
+
+p {
+  line-height: 1.65;
+}
+
+textarea {
+  line-height: 1.5;
+}
+
+*:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.7);
+  outline-offset: 2px;
+}
