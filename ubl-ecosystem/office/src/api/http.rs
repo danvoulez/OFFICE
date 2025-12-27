@@ -7,7 +7,7 @@ use axum::{
     extract::{Path, State, Query},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post, delete, patch},
+    routing::{get, post, delete},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -16,12 +16,12 @@ use tower_http::cors::{CorsLayer, Any};
 use tracing::info;
 
 use crate::entity::{Entity, EntityId, EntityParams, EntityType, Instance};
-use crate::session::{Session, SessionType, SessionMode, SessionConfig, Handover};
-use crate::context::{ContextFrameBuilder, Narrator, NarrativeConfig};
-use crate::governance::{Constitution, SanityCheck, DreamingCycle, DreamingConfig, Simulation, SimulationConfig};
+use crate::session::{Session, SessionType, SessionMode, SessionConfig};
+use crate::context::{ContextFrameBuilder, Narrator};
+use crate::governance::{Constitution, DreamingCycle, DreamingConfig, Simulation, SimulationConfig, Action};
 use crate::ubl_client::UblClient;
 use crate::llm::{LlmProvider, LlmRequest, LlmMessage};
-use crate::{OfficeConfig, Result, OfficeError};
+use crate::{OfficeConfig, OfficeError};
 
 /// Application state
 pub struct AppState {
@@ -118,7 +118,7 @@ struct CreateEntityRequest {
 async fn create_entity(
     State(state): State<SharedState>,
     Json(req): Json<CreateEntityRequest>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> std::result::Result<impl IntoResponse, ApiError> {
     let params = EntityParams {
         name: req.name,
         entity_type: req.entity_type,
@@ -143,14 +143,14 @@ async fn list_entities(
     State(state): State<SharedState>,
 ) -> impl IntoResponse {
     let state = state.read().await;
-    let entities: Vec<&Entity> = state.entities.values().collect();
+    let entities: Vec<Entity> = state.entities.values().cloned().collect();
     Json(entities)
 }
 
 async fn get_entity(
     State(state): State<SharedState>,
     Path(id): Path<String>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> std::result::Result<impl IntoResponse, ApiError> {
     let state = state.read().await;
     let entity = state.entities.get(&id)
         .ok_or_else(|| ApiError::NotFound(format!("Entity not found: {}", id)))?;
@@ -160,10 +160,10 @@ async fn get_entity(
 async fn delete_entity(
     State(state): State<SharedState>,
     Path(id): Path<String>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> std::result::Result<impl IntoResponse, ApiError> {
     let mut state = state.write().await;
 
-    if let Some(mut entity) = state.entities.get_mut(&id) {
+    if let Some(entity) = state.entities.get_mut(&id) {
         entity.archive();
         info!("Archived entity: {}", id);
         Ok(StatusCode::NO_CONTENT)
@@ -186,7 +186,7 @@ async fn create_session(
     State(state): State<SharedState>,
     Path(entity_id): Path<String>,
     Json(req): Json<CreateSessionRequest>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> std::result::Result<impl IntoResponse, ApiError> {
     let mut state = state.write().await;
 
     // Check entity exists
@@ -255,7 +255,7 @@ async fn create_session(
 async fn get_session(
     State(state): State<SharedState>,
     Path((entity_id, session_id)): Path<(String, String)>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> std::result::Result<impl IntoResponse, ApiError> {
     let state = state.read().await;
 
     let session = state.sessions.get(&session_id)
@@ -271,21 +271,24 @@ async fn get_session(
 async fn end_session(
     State(state): State<SharedState>,
     Path((entity_id, session_id)): Path<(String, String)>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> std::result::Result<impl IntoResponse, ApiError> {
     let mut state = state.write().await;
 
-    let session = state.sessions.get_mut(&session_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Session not found: {}", session_id)))?;
+    let tokens_consumed = {
+        let session = state.sessions.get_mut(&session_id)
+            .ok_or_else(|| ApiError::NotFound(format!("Session not found: {}", session_id)))?;
 
-    if session.entity_id != entity_id {
-        return Err(ApiError::NotFound("Session not found for entity".to_string()));
-    }
+        if session.entity_id != entity_id {
+            return Err(ApiError::NotFound("Session not found for entity".to_string()));
+        }
 
-    session.complete(None);
+        session.complete(None);
+        session.tokens_consumed
+    };
 
     // Update entity stats
     if let Some(entity) = state.entities.get_mut(&entity_id) {
-        entity.record_session(session.tokens_consumed);
+        entity.record_session(tokens_consumed);
     }
 
     info!("Ended session: {}", session_id);
@@ -309,60 +312,68 @@ async fn send_message(
     State(state): State<SharedState>,
     Path((entity_id, session_id)): Path<(String, String)>,
     Json(req): Json<SendMessageRequest>,
-) -> Result<impl IntoResponse, ApiError> {
-    let mut state_guard = state.write().await;
+) -> std::result::Result<impl IntoResponse, ApiError> {
+    let (narrative, remaining_budget, current_instance_id, llm_provider) = {
+        let state_guard = state.read().await;
 
-    let session = state_guard.sessions.get_mut(&session_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Session not found: {}", session_id)))?;
+        let session = state_guard.sessions.get(&session_id)
+            .ok_or_else(|| ApiError::NotFound(format!("Session not found: {}", session_id)))?;
 
-    if session.entity_id != entity_id {
-        return Err(ApiError::NotFound("Session not found for entity".to_string()));
-    }
+        if session.entity_id != entity_id {
+            return Err(ApiError::NotFound("Session not found for entity".to_string()));
+        }
 
-    if !session.is_active() {
-        return Err(ApiError::BadRequest("Session is not active".to_string()));
-    }
+        if !session.is_active() {
+            return Err(ApiError::BadRequest("Session is not active".to_string()));
+        }
 
-    // Get context from instance
-    let instance = state_guard.instances.get(&session.current_instance_id.clone().unwrap_or_default())
-        .ok_or_else(|| ApiError::BadRequest("No active instance".to_string()))?;
+        let instance_id = session.current_instance_id.clone().unwrap_or_default();
 
-    let context = instance.context_frame.as_ref()
-        .ok_or_else(|| ApiError::BadRequest("No context frame".to_string()))?;
+        // Get context from instance
+        let instance = state_guard.instances.get(&instance_id)
+            .ok_or_else(|| ApiError::BadRequest("No active instance".to_string()))?;
 
-    // Build narrative
-    let narrator = Narrator::default();
-    let narrative = narrator.generate(context);
+        let context = instance.context_frame.as_ref()
+            .ok_or_else(|| ApiError::BadRequest("No context frame".to_string()))?;
+
+        // Build narrative
+        let narrator = Narrator::default();
+        let narrative = narrator.generate(context);
+        let remaining = session.remaining_budget();
+        let llm_provider = state_guard.llm_provider.clone();
+
+        (narrative, remaining, instance_id, llm_provider)
+    };
 
     // Create LLM request
     let llm_request = LlmRequest::new(vec![
         LlmMessage::system(narrative),
         LlmMessage::user(req.content),
     ])
-    .with_max_tokens(session.remaining_budget() as u32);
-
-    let llm_provider = state_guard.llm_provider.clone();
-
-    // Release lock before async call
-    drop(state_guard);
+    .with_max_tokens(remaining_budget as u32);
 
     // Call LLM
     let response = llm_provider.chat(llm_request).await?;
+    let tokens_used = response.usage.total_tokens as u64;
 
-    // Update session
-    let mut state_guard = state.write().await;
-    let session = state_guard.sessions.get_mut(&session_id).unwrap();
-    session.consume_tokens(response.usage.total_tokens as u64);
-
-    // Update instance
-    if let Some(instance) = state_guard.instances.get_mut(&session.current_instance_id.clone().unwrap_or_default()) {
-        instance.consume_tokens(response.usage.total_tokens as u64);
-    }
+    // Update session and instance
+    let remaining = {
+        let mut state_guard = state.write().await;
+        if let Some(session) = state_guard.sessions.get_mut(&session_id) {
+            session.consume_tokens(tokens_used);
+        }
+        if let Some(instance) = state_guard.instances.get_mut(&current_instance_id) {
+            instance.consume_tokens(tokens_used);
+        }
+        state_guard.sessions.get(&session_id)
+            .map(|s| s.remaining_budget())
+            .unwrap_or(0)
+    };
 
     Ok(Json(MessageResponse {
         response: response.content,
-        tokens_used: response.usage.total_tokens as u64,
-        session_remaining: session.remaining_budget(),
+        tokens_used,
+        session_remaining: remaining,
     }))
 }
 
@@ -371,7 +382,7 @@ async fn send_message(
 async fn trigger_dream(
     State(state): State<SharedState>,
     Path(entity_id): Path<String>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> std::result::Result<impl IntoResponse, ApiError> {
     let state_guard = state.read().await;
 
     let entity = state_guard.entities.get(&entity_id)
@@ -407,7 +418,7 @@ async fn trigger_dream(
 async fn get_memory(
     State(state): State<SharedState>,
     Path(entity_id): Path<String>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> std::result::Result<impl IntoResponse, ApiError> {
     let state = state.read().await;
 
     let entity = state.entities.get(&entity_id)
@@ -428,7 +439,7 @@ async fn update_constitution(
     State(state): State<SharedState>,
     Path(entity_id): Path<String>,
     Json(constitution): Json<Constitution>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> std::result::Result<impl IntoResponse, ApiError> {
     let mut state = state.write().await;
 
     let entity = state.entities.get_mut(&entity_id)
@@ -444,7 +455,7 @@ async fn update_constitution(
 async fn get_constitution(
     State(state): State<SharedState>,
     Path(entity_id): Path<String>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> std::result::Result<impl IntoResponse, ApiError> {
     let state = state.read().await;
 
     let entity = state.entities.get(&entity_id)
@@ -467,10 +478,10 @@ struct SimulateRequest {
 async fn simulate_action(
     State(state): State<SharedState>,
     Json(req): Json<SimulateRequest>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> std::result::Result<impl IntoResponse, ApiError> {
     let simulation = Simulation::new(SimulationConfig::default());
 
-    let action = crate::governance::simulation::Action {
+    let action = Action {
         id: req.action_id,
         name: req.action_name,
         parameters: req.parameters,
@@ -488,7 +499,7 @@ async fn simulate_action(
 async fn list_affordances(
     State(state): State<SharedState>,
     Query(params): Query<HashMap<String, String>>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> std::result::Result<impl IntoResponse, ApiError> {
     let state = state.read().await;
 
     if let Some(entity_id) = params.get("entity_id") {
@@ -501,9 +512,9 @@ async fn list_affordances(
 }
 
 async fn get_affordance(
-    State(state): State<SharedState>,
+    State(_state): State<SharedState>,
     Path(id): Path<String>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     // In real implementation, would fetch specific affordance
     Err(ApiError::NotFound(format!("Affordance not found: {}", id)))
 }

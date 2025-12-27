@@ -3,8 +3,7 @@
 use tokio::sync::mpsc;
 use serde::{Deserialize, Serialize};
 
-use crate::{OfficeError, Result};
-use super::ledger::LedgerEvent;
+use crate::Result;
 
 /// An event from the SSE stream
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -101,13 +101,13 @@ pub struct AppState {
     pub conversations: ConversationStore,
     pub messages: MessageStore,
     pub office_client: OfficeClient,
-    pub ubl_client: MessengerUblClient,
+    pub ubl_client: std::sync::Arc<MessengerUblClient>,
 }
 
 impl AppState {
     pub fn new(config: MessengerConfig) -> Self {
         let office_client = OfficeClient::new(&config.office.endpoint, config.office.timeout_ms);
-        let ubl_client = MessengerUblClient::new(&config.ubl.endpoint, &config.ubl.container_id);
+        let ubl_client = std::sync::Arc::new(MessengerUblClient::new(&config.ubl.endpoint, &config.ubl.container_id));
 
         Self {
             config,

@@ -189,10 +189,11 @@ impl SanityCheck {
 
     /// Check if a claim is factual (vs opinion)
     fn is_factual_claim(&self, sentence: &str) -> bool {
-        let opinion_markers = ["I think", "I believe", "I feel", "seems", "appears",
+        let opinion_markers = ["i think", "i believe", "i feel", "seems", "appears",
             "penso", "acho", "sinto", "parece"];
 
-        !opinion_markers.iter().any(|m| sentence.to_lowercase().contains(m))
+        let sentence_lower = sentence.to_lowercase();
+        !opinion_markers.iter().any(|m| sentence_lower.contains(m))
     }
 
     /// Query objective facts from UBL

@@ -14,4 +14,4 @@ mod simulation;
 pub use sanity_check::{SanityCheck, SanityCheckConfig, Claim, Fact, Discrepancy, GovernanceNote};
 pub use constitution::{Constitution, BehavioralOverride, ConstitutionBuilder};
 pub use dreaming::{DreamingCycle, DreamingConfig, DreamingResult};
-pub use simulation::{Simulation, SimulationConfig, SimulationResult, ActionOutcome, ActionRecommendation};
+pub use simulation::{Simulation, SimulationConfig, SimulationResult, ActionOutcome, ActionRecommendation, Action};

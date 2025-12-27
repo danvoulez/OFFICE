@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::IntoResponse;
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -54,7 +54,7 @@ impl WebSocketHandler {
 
     /// Handle WebSocket connection
     async fn handle_socket(socket: WebSocket, state: Arc<RwLock<AppState>>) {
-        let (mut sender, mut receiver) = socket.split();
+        let (sender, mut receiver) = socket.split();
 
         // Spawn task to handle incoming messages
         let state_clone = state.clone();
